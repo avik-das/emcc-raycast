@@ -109,6 +109,11 @@ struct vec2 * line_intersect(struct line_t *l1, struct line_t *l2) {
     return ts;
 }
 
+struct vec2 * line_eval(struct line_t *line, float t) {
+    return vec2_create(line->start.x + line->dir.x * t,
+                       line->start.y + line->dir.y * t);
+}
+
 // -- COLOR --------------------------------------------------------------------
 
 #define SDL_COLOR_SKY(surface) SDL_MapRGB((surface)->format, 128, 128, 255)
@@ -222,6 +227,44 @@ void player_rotate(struct player_t *player, float ang) {
         .y = new_dir->y
     };
     free(new_dir);
+}
+
+int player_attempt_move(struct player_t *player, struct map_t *map,
+        float dist) {
+    struct line_t ray = (struct line_t) {
+        .start = {
+            .x = player->pos.x,
+            .y = player->pos.y
+        },
+        .dir = {
+            .x = player->dir.x * dist,
+            .y = player->dir.y * dist
+        }
+    };
+
+    for (int i = 0; i < map->num_walls; i++) {
+        struct wall_t *wall = map->walls + i;
+
+        struct vec2 *ts = line_intersect(&ray, &wall->line);
+
+        if (ts->x < 0 || ts->x > 0 ||
+            ts->y < 0 || ts->y > 1) {
+            free(ts);
+            continue;
+        }
+
+        free(ts);
+        return 0;
+    }
+
+    struct vec2 *new_pos = line_eval(&ray, 1.0f);
+    player->pos = (struct vec2) {
+        .x = new_pos->x,
+        .y = new_pos->y
+    };
+
+    free(new_pos);
+    return 1;
 }
 
 struct canvas_t {
@@ -429,12 +472,10 @@ int handle_keypress(SDL_KeyboardEvent *key) {
         return 1;
 
     case SDLK_UP:
-        printf("up\n");
-        return 1;
+        return player_attempt_move(player, map, 0.025);
 
     case SDLK_DOWN:
-        printf("down\n");
-        return 1;
+        return player_attempt_move(player, map, -0.025);
 
     default:
         return 0;

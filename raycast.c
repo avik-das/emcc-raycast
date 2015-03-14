@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <SDL/SDL.h>
+#include <SDL/SDL_image.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -132,11 +134,22 @@ int sdl_value_from_color(SDL_Surface *surface, struct color_t *color) {
     return SDL_MapRGB(surface->format, r, g, b);
 }
 
+// -- TEXTURE ------------------------------------------------------------------
+
+#define TEXTURE_NAME(base) "textures/" base
+
+struct texture_t {
+    SDL_Surface *surface;
+    // in case we need more data in the future
+};
+
 // -- DATA ---------------------------------------------------------------------
 
 struct wall_t {
+    int has_texture;
     struct line_t line;
     struct color_t color;
+    struct texture_t texture;
 };
 
 void add_wall(struct wall_t *walls, int i,
@@ -146,8 +159,19 @@ void add_wall(struct wall_t *walls, int i,
     float diry = endy - starty;
 
     walls[i] = (struct wall_t) {
+        .has_texture = 0,
         .line = { { startx, starty }, { dirx, diry } },
-        .color = { r, g, b }
+        .color = { r, g, b },
+        .texture = { 0 }
+    };
+}
+
+void add_texture(struct wall_t *wall, const char *texture_name) {
+    SDL_Surface *surface = IMG_Load(texture_name);
+
+    wall->has_texture = 1;
+    wall->texture = (struct texture_t) {
+        .surface = surface
     };
 }
 
@@ -163,11 +187,15 @@ struct map_t * load_map() {
     map->walls = (struct wall_t *)
         malloc(sizeof(struct wall_t) * map->num_walls);
 
-    add_wall(map->walls, 0, 0.0f, 0.5f, 0.2f, 0.5f, 1.0f, 0.0f, 0.0f);
-    add_wall(map->walls, 1, 0.2f, 0.5f, 0.2f, 0.3f, 0.0f, 1.0f, 0.0f);
-    add_wall(map->walls, 2, 0.2f, 0.3f, 0.8f, 0.3f, 0.0f, 0.0f, 1.0f);
-    add_wall(map->walls, 3, 0.8f, 0.3f, 0.8f, 0.5f, 0.0f, 1.0f, 1.0f);
-    add_wall(map->walls, 4, 0.8f, 0.5f, 1.0f, 0.5f, 1.0f, 1.0f, 0.0f);
+    add_wall(map->walls, 0, 0.0f, 0.5f, 0.2f, 0.5f, 0.0f, 0.0f, 0.0f);
+    add_wall(map->walls, 1, 0.2f, 0.5f, 0.2f, 0.3f, 0.0f, 0.0f, 0.0f);
+    add_wall(map->walls, 2, 0.2f, 0.3f, 0.8f, 0.3f, 0.0f, 0.0f, 0.0f);
+    add_wall(map->walls, 3, 0.8f, 0.3f, 0.8f, 0.5f, 1.0f, 0.0f, 0.0f);
+    add_wall(map->walls, 4, 0.8f, 0.5f, 1.0f, 0.5f, 0.0f, 0.0f, 1.0f);
+
+    add_texture(map->walls    , TEXTURE_NAME("brick.jpg"));
+    add_texture(map->walls + 1, TEXTURE_NAME("brick.jpg"));
+    add_texture(map->walls + 2, TEXTURE_NAME("orange-damascus.png"));
 
     return map;
 }
@@ -215,6 +243,11 @@ void draw_colums(struct canvas_t *canvas, struct player_t * player,
     SDL_Surface *surface = canvas->surface;
     SDL_Rect rect;
 
+    int num_pixels =
+        4 * canvas->surface->w * canvas->surface->h;
+    char *sw_rendered = (char *) malloc(num_pixels);
+    memset(sw_rendered, 0, num_pixels);
+
     float d_ang = player->fov / canvas->w;
 
     for (int x = 0; x < SCREEN_WIDTH; x++) {
@@ -247,22 +280,72 @@ void draw_colums(struct canvas_t *canvas, struct player_t * player,
         if (h <= 0.0f)
             continue;
 
-        rect = (SDL_Rect) {
-            .x = x,
-            .y = (canvas->h - h) / 2,
-            .w = 1,
-            .h = h
-        };
+        if (hit->wall->has_texture) {
+            SDL_Surface *texsurface = hit->wall->texture.surface;
+            int texw = texsurface->w;
+            int texh = texsurface->h;
+            int srcx = ((int) round(texw * hit->wall_ts)) % texw;
+            int dsty = (canvas->h - h) / 2;
+            for (int dsty_offset = 0; dsty_offset < h; dsty_offset++) {
+                dsty++;
 
-        struct color_t color = hit->wall->color;
+                int srcy = (int) (((float) dsty_offset) / h * texh);
 
-        if (hit->t > 1.0f) {
-            color_intensify_inplace(&color, 1.0f / hit->t);
+                int dst_offset = srcy * texsurface->w + srcx;
+                *((Uint32 *) sw_rendered + dsty * surface->w + x) =
+                    ((Uint32 *) texsurface->pixels)[dst_offset];
+            }
+        } else {
+            rect = (SDL_Rect) {
+                .x = x,
+                .y = (canvas->h - h) / 2,
+                .w = 1,
+                .h = h
+            };
+
+            struct color_t color = hit->wall->color;
+
+            if (hit->t > 1.0f) {
+                color_intensify_inplace(&color, 1.0f / hit->t);
+            }
+
+            int sdl_color = sdl_value_from_color(surface, &color);
+            SDL_FillRect(surface, &rect, sdl_color);
         }
-
-        int sdl_color = sdl_value_from_color(surface, &color);
-        SDL_FillRect(surface, &rect, sdl_color);
     }
+
+    SDL_Surface *overlay = SDL_CreateRGBSurfaceFrom(
+            sw_rendered,
+            surface->w,
+            surface->h,
+            32,
+            surface->w * 4,
+            0x0000FF,
+            0x00FF00,
+            0xFF0000,
+            0
+            );
+
+    SDL_Rect srcrect = (SDL_Rect) {
+        .x = 0,
+        .y = 0,
+        .w = surface->w,
+        .h = surface->h
+    };
+
+    SDL_Rect dstrect = (SDL_Rect) {
+        .x = 0,
+        .y = 0,
+        .w = 0,
+        .h = 0
+    };
+
+    SDL_BlitSurface(
+            overlay,
+            &srcrect,
+            surface,
+            &dstrect
+            );
 }
 
 void cast_one_ray(struct map_t *map, struct hit_t **hits, int x,

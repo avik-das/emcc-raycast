@@ -215,10 +215,20 @@ struct player_t * player_create() {
     return p;
 }
 
+void player_rotate(struct player_t *player, float ang) {
+    struct vec2 *new_dir = vec2_rotate(&player->dir, ang);
+    player->dir = (struct vec2) {
+        .x = new_dir->x,
+        .y = new_dir->y
+    };
+    free(new_dir);
+}
+
 struct canvas_t {
     SDL_Surface *surface;
     int w;
     int h;
+    int has_rendered;
 };
 
 // -- RENDERING ----------------------------------------------------------------
@@ -346,6 +356,9 @@ void draw_colums(struct canvas_t *canvas, struct player_t * player,
             surface,
             &dstrect
             );
+
+    SDL_FreeSurface(overlay);
+    free(sw_rendered);
 }
 
 void cast_one_ray(struct map_t *map, struct hit_t **hits, int x,
@@ -401,6 +414,63 @@ struct hit_t ** cast_rays(struct map_t *map, struct player_t *player,
 
 // -- MAIN LOOP ----------------------------------------------------------------
 
+struct map_t *map;
+struct player_t *player;
+struct canvas_t *canvas;
+
+int handle_keypress(SDL_KeyboardEvent *key) {
+    switch (key->keysym.sym) {
+    case SDLK_LEFT:
+        player_rotate(player, -0.087);
+        return 1;
+
+    case SDLK_RIGHT:
+        player_rotate(player, 0.087);
+        return 1;
+
+    case SDLK_UP:
+        printf("up\n");
+        return 1;
+
+    case SDLK_DOWN:
+        printf("down\n");
+        return 1;
+
+    default:
+        return 0;
+    }
+}
+
+int handle_events() {
+    SDL_Event event;
+
+    int rerender = 0;
+    while (SDL_PollEvent(&event)) {
+        switch (event.type) {
+        case SDL_KEYDOWN:
+            rerender = handle_keypress(&event.key) || rerender;
+            break;
+
+        default:
+            break;
+        }
+    }
+
+    return rerender;
+}
+
+void iterate() {
+    if (handle_events() || !canvas->has_rendered) {
+        canvas->has_rendered = 1;
+
+        struct hit_t **hits = cast_rays(map, player, canvas->w);
+        draw_colums(canvas, player, hits);
+        free(hits);
+
+        SDL_Flip(canvas->surface);
+    }
+}
+
 int main(int argc, char** argv) {
   SDL_Init(SDL_INIT_VIDEO);
   SDL_Surface *surface = SDL_SetVideoMode(
@@ -410,14 +480,16 @@ int main(int argc, char** argv) {
           SDL_HWSURFACE
           );
 
-  struct canvas_t canvas = {
+  canvas = (struct canvas_t *) malloc(sizeof(struct canvas_t));
+  *canvas = (struct canvas_t) {
       .surface = surface,
       .w = SCREEN_WIDTH,
-      .h = SCREEN_HEIGHT
+      .h = SCREEN_HEIGHT,
+      .has_rendered = 0
   };
 
-  struct player_t *player = player_create();
-  struct map_t * map = load_map();
+  player = player_create();
+  map = load_map();
 
 #ifdef TEST_SDL_LOCK_OPTS
   EM_ASM(
@@ -427,11 +499,11 @@ int main(int argc, char** argv) {
         );
 #endif
 
-  struct hit_t **hits = cast_rays(map, player, canvas.w);
-  draw_colums(&canvas, player, hits);
-  free(hits);
-
-  SDL_Flip(surface);
+#ifdef __EMSCRIPTEN__
+  emscripten_set_main_loop(iterate, 0, 1);
+#endif
+  // If we wanted to support non-asm.js targets, we would support a manual
+  // main loop.
 
   SDL_Quit();
 

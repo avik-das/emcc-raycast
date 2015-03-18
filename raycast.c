@@ -9,8 +9,8 @@
 #include <emscripten.h>
 #endif
 
-#define SCREEN_WIDTH  256
-#define SCREEN_HEIGHT 256
+#define SCREEN_WIDTH  512
+#define SCREEN_HEIGHT 512
 
 // -- 2D VECTOR ----------------------------------------------------------------
 

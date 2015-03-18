@@ -57,7 +57,7 @@ float mat2_determinant(struct mat2 *m) {
 
 struct mat2 * mat2_invert(struct mat2 *m) {
     float det = mat2_determinant(m);
-    if (det < 1e-10f && det > -1e-10f)
+    if (det == 0.0f)
         return NULL;
 
     return mat2_create( m->d / det, -m->b / det,
@@ -291,15 +291,20 @@ struct hit_t * hit_create(float t, struct wall_t *wall, float wall_ts) {
     return h;
 }
 
+void fill_column(SDL_Surface *surface, int x, int y, int h, Uint32 color) {
+    for (int dy = 0; dy < h; dy++) {
+        if (y >= surface->h)
+            break;
+
+        ((Uint32 *) surface->pixels)[y * surface->w + x] = color;
+
+        y++;
+    }
+}
+
 void draw_colums(struct canvas_t *canvas, struct player_t * player,
         struct hit_t **hits) {
     SDL_Surface *surface = canvas->surface;
-    SDL_Rect rect;
-
-    int num_pixels =
-        4 * canvas->surface->w * canvas->surface->h;
-    char *sw_rendered = (char *) malloc(num_pixels);
-    memset(sw_rendered, 0, num_pixels);
 
     float d_ang = player->fov / canvas->w;
 
@@ -307,22 +312,22 @@ void draw_colums(struct canvas_t *canvas, struct player_t * player,
         float ang = d_ang * (x - canvas->w / 2);
 
         // 1. draw sky
-        rect = (SDL_Rect) {
-            .x = x,
-            .y = 0,
-            .w = 1,
-            .h = canvas->h / 2
-        };
-        SDL_FillRect(surface, &rect, SDL_COLOR_SKY(surface));
+        fill_column(
+                surface,
+                x,
+                0,
+                canvas->h / 2,
+                SDL_COLOR_SKY(surface)
+                );
 
         // 2. draw ground
-        rect = (SDL_Rect) {
-            .x = x,
-            .y = canvas->h / 2,
-            .w = 1,
-            .h = canvas->h / 2
-        };
-        SDL_FillRect(surface, &rect, SDL_COLOR_GROUND(surface));
+        fill_column(
+                surface,
+                x,
+                canvas->h / 2,
+                canvas->h / 2,
+                SDL_COLOR_GROUND(surface)
+                );
 
         // 3. draw wall if necessary
         struct hit_t *hit = hits[x];
@@ -338,70 +343,37 @@ void draw_colums(struct canvas_t *canvas, struct player_t * player,
             int texw = texsurface->w;
             int texh = texsurface->h;
             int srcx = ((int) round(texw * hit->wall_ts)) % texw;
-            int dsty = (canvas->h - h) / 2;
-            for (int dsty_offset = 0; dsty_offset < h; dsty_offset++) {
-                dsty++;
+            int y = (canvas->h - h) / 2;
 
-                int srcy = (int) (((float) dsty_offset) / h * texh);
+            for (int dy = 0; dy < h; dy++) {
+                if (y >= surface->h)
+                    break;
 
+                int srcy = (int) (((float) dy) / h * texh);
                 int dst_offset = srcy * texsurface->w + srcx;
-                *((Uint32 *) sw_rendered + dsty * surface->w + x) =
+
+                ((Uint32 *) surface->pixels)[y * surface->w + x] =
                     ((Uint32 *) texsurface->pixels)[dst_offset];
+
+                y++;
             }
         } else {
-            rect = (SDL_Rect) {
-                .x = x,
-                .y = (canvas->h - h) / 2,
-                .w = 1,
-                .h = h
-            };
-
             struct color_t color = hit->wall->color;
 
             if (hit->t > 1.0f) {
                 color_intensify_inplace(&color, 1.0f / hit->t);
             }
 
-            int sdl_color = sdl_value_from_color(surface, &color);
-            SDL_FillRect(surface, &rect, sdl_color);
+            Uint32 sdl_color = sdl_value_from_color(surface, &color);
+            fill_column(
+                    surface,
+                    x,
+                    (canvas->h - h) / 2,
+                    h,
+                    sdl_color
+                    );
         }
     }
-
-    SDL_Surface *overlay = SDL_CreateRGBSurfaceFrom(
-            sw_rendered,
-            surface->w,
-            surface->h,
-            32,
-            surface->w * 4,
-            0x0000FF,
-            0x00FF00,
-            0xFF0000,
-            0
-            );
-
-    SDL_Rect srcrect = (SDL_Rect) {
-        .x = 0,
-        .y = 0,
-        .w = surface->w,
-        .h = surface->h
-    };
-
-    SDL_Rect dstrect = (SDL_Rect) {
-        .x = 0,
-        .y = 0,
-        .w = 0,
-        .h = 0
-    };
-
-    SDL_BlitSurface(
-            overlay,
-            &srcrect,
-            surface,
-            &dstrect
-            );
-
-    SDL_FreeSurface(overlay);
-    free(sw_rendered);
 }
 
 void cast_one_ray(struct map_t *map, struct hit_t **hits, int x,
@@ -504,11 +476,21 @@ void iterate() {
     if (handle_events() || !canvas->has_rendered) {
         canvas->has_rendered = 1;
 
+        SDL_Rect rect = {
+            .x = 0,
+            .y = 0,
+            .w = canvas->w,
+            .h = canvas->h
+        };
+        SDL_FillRect(canvas->surface, &rect, SDL_COLOR_ERROR(canvas->surface));
+
+        SDL_LockSurface(canvas->surface);
         struct hit_t **hits = cast_rays(map, player, canvas->w);
         draw_colums(canvas, player, hits);
-        free(hits);
+        SDL_UnlockSurface(canvas->surface);
 
         SDL_Flip(canvas->surface);
+        free(hits);
     }
 }
 
